@@ -50,11 +50,9 @@ class INPUT(ctypes.Structure):
     _fields_ = (("type", wintypes.DWORD),
                 ("union", INPUT_UNION))
 
-# Isolate SendInput to avoid crashing with Plover's ctypes argtypes
-_user32 = ctypes.WinDLL('user32', use_last_error=True)
-_IsolatedSendInput = getattr(_user32, 'SendInput')
-_IsolatedSendInput.argtypes = [wintypes.UINT, ctypes.c_void_p, ctypes.c_int]
-_IsolatedSendInput.restype = wintypes.UINT
+# Isolate SendInput securely to prevent Plover ctypes 'argtypes' crashes
+_SendInput_proto = ctypes.WINFUNCTYPE(wintypes.UINT, wintypes.UINT, ctypes.c_void_p, ctypes.c_int)
+_IsolatedSendInput = _SendInput_proto(('SendInput', ctypes.windll.user32))
 
 def _send_mouse_input(flags, dx=0, dy=0, data=0):
     x = INPUT(type=INPUT_MOUSE, union=INPUT_UNION(mi=MOUSEINPUT(int(dx), int(dy), int(data), int(flags), 0, None)))
@@ -114,10 +112,12 @@ class PloverMouseExtension:
         
         # Physical QWERTY to vector mappings (dx, dy, scroll_dy)
         self.key_map: Dict[str, Tuple[int, int, int]] = {
-            'h': (0, -5, 0),  # Right Hand R (-R) = Up
-            'u': (0, 5, 0),   # Right Hand P (-P) = Down
-            'j': (-5, 0, 0),  # Right Hand B (-B) = Left
-            'k': (5, 0, 0),   # Right Hand G (-G) = Right
+            'i': (0, -5, 0),  # -P = Up
+            'k': (0, 5, 0),   # -B = Down
+            'j': (-5, 0, 0),  # -R = Left
+            'l': (5, 0, 0),   # -G = Right
+            'u': (0, 0, 1),   # -F = Scroll Up
+            'h': (0, 0, -1),  # -? = Scroll Down
         }
         
         # Keys that MUST be held down to activate movement
