@@ -4,7 +4,6 @@ import threading
 import time
 from typing import Dict, Tuple, List
 
-from pynput import keyboard
 from plover.engine import StenoEngine
 
 import ctypes
@@ -51,9 +50,15 @@ class INPUT(ctypes.Structure):
     _fields_ = (("type", wintypes.DWORD),
                 ("union", INPUT_UNION))
 
+# Isolate SendInput to avoid crashing with Plover's ctypes argtypes
+_user32 = ctypes.WinDLL('user32', use_last_error=True)
+_IsolatedSendInput = getattr(_user32, 'SendInput')
+_IsolatedSendInput.argtypes = [wintypes.UINT, ctypes.c_void_p, ctypes.c_int]
+_IsolatedSendInput.restype = wintypes.UINT
+
 def _send_mouse_input(flags, dx=0, dy=0, data=0):
     x = INPUT(type=INPUT_MOUSE, union=INPUT_UNION(mi=MOUSEINPUT(int(dx), int(dy), int(data), int(flags), 0, None)))
-    ctypes.windll.user32.SendInput(1, ctypes.byref(x), ctypes.sizeof(x))
+    _IsolatedSendInput(1, ctypes.byref(x), ctypes.sizeof(x))
 
 # --- Standard Plover Commands for Clicking ---
 
@@ -90,9 +95,14 @@ def mouse_click(engine: StenoEngine, args: str):
 
 # --- Extention Plugin for Continuous Movement ---
 
+def _is_key_pressed(char: str) -> bool:
+    """Uses native Windows GetAsyncKeyState to check physical key state."""
+    vk = ctypes.windll.user32.VkKeyScanW(ord(char)) & 0xFF
+    return (ctypes.windll.user32.GetAsyncKeyState(vk) & 0x8000) != 0
+
 class PloverMouseExtension:
     """
-    A Plover Extension plugin that intercepts raw QWERTY keys to provide
+    A Plover Extension plugin that uses GetAsyncKeyState to provide
     smooth, continuous mouse movement and scrolling while the keys are held down.
     Allows specifying modifier keys that must be held to activate movement.
     """
@@ -101,12 +111,7 @@ class PloverMouseExtension:
         self.engine = engine
         self._running = False
         self._thread = None
-        self._listener = None
         
-        self.active_dx = 0
-        self.active_dy = 0
-        self.active_scroll_y = 0
-
         # Physical QWERTY to vector mappings (dx, dy, scroll_dy)
         self.key_map: Dict[str, Tuple[int, int, int]] = {
             'h': (0, -5, 0),  # Right Hand R (-R) = Up
@@ -116,10 +121,7 @@ class PloverMouseExtension:
         }
         
         # Keys that MUST be held down to activate movement
-        # e.g., 'a' (S), 's' (K), 'e' (P), 'f' (R) for left hand SKPR
         self.modifier_keys: List[str] = ['a', 's', 'e', 'f']
-
-        self.pressed_keys = set()
         
         self.load_config()
 
@@ -149,55 +151,36 @@ class PloverMouseExtension:
         self._running = True
         self._thread = threading.Thread(target=self._movement_loop, daemon=True)
         self._thread.start()
-        self._listener = keyboard.Listener(on_press=self.on_press, on_release=self.on_release)
-        self._listener.start()
 
     def stop(self):
         self._running = False
-        if self._listener:
-            self._listener.stop()
         if self._thread:
             self._thread.join(timeout=1.0)
             
     def _modifiers_active(self) -> bool:
         if not self.modifier_keys:
             return True
-        return all(mod in self.pressed_keys for mod in self.modifier_keys)
-
-    def on_press(self, key):
-        try:
-            char = key.char.lower()
-            if char not in self.pressed_keys:
-                self.pressed_keys.add(char)
-                if char in self.key_map:
-                    dx, dy, sdy = self.key_map[char]
-                    self.active_dx += dx
-                    self.active_dy += dy
-                    self.active_scroll_y += sdy
-        except AttributeError:
-            pass
-
-    def on_release(self, key):
-        try:
-            char = key.char.lower()
-            if char in self.pressed_keys:
-                self.pressed_keys.remove(char)
-                if char in self.key_map:
-                    dx, dy, sdy = self.key_map[char]
-                    self.active_dx -= dx
-                    self.active_dy -= dy
-                    self.active_scroll_y -= sdy
-        except AttributeError:
-            pass
+        return all(_is_key_pressed(mod) for mod in self.modifier_keys)
 
     def _movement_loop(self):
         while self._running:
             if self._modifiers_active():
-                if self.active_dx != 0 or self.active_dy != 0:
-                    _send_mouse_input(MOUSEEVENTF_MOVE, dx=self.active_dx, dy=self.active_dy)
+                active_dx = 0
+                active_dy = 0
+                active_scroll_y = 0
                 
-                if self.active_scroll_y != 0:
-                    _send_mouse_input(MOUSEEVENTF_WHEEL, data=self.active_scroll_y * 15)
+                # Poll movement keys
+                for char, (dx, dy, sdy) in self.key_map.items():
+                    if _is_key_pressed(char):
+                        active_dx += dx
+                        active_dy += dy
+                        active_scroll_y += sdy
+                
+                if active_dx != 0 or active_dy != 0:
+                    _send_mouse_input(MOUSEEVENTF_MOVE, dx=active_dx, dy=active_dy)
+                
+                if active_scroll_y != 0:
+                    _send_mouse_input(MOUSEEVENTF_WHEEL, data=active_scroll_y * 15)
                 
             time.sleep(0.01)
 
