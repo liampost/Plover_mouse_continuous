@@ -110,6 +110,21 @@ class PloverMouseExtension:
         self._running = False
         self._thread = None
         
+        # Dump engine internals to discover how to read keystates
+        dump_path = r'C:\Users\postw\OneDrive\Documents\Coding\MISC\Plover_plugins\plover_mouse_continuous\engine_dump.txt'
+        try:
+            with open(dump_path, 'w') as f:
+                f.write("ENGINE DIR:\n")
+                f.write(str(dir(engine)))
+                f.write("\n\nMACHINE DIR:\n")
+                if hasattr(engine, 'machine'):
+                    f.write(str(dir(engine.machine)))
+                    f.write("\n\nKEYMAP DIR:\n")
+                    if hasattr(engine.machine, 'keymap'):
+                        f.write(str(dir(engine.machine.keymap)))
+        except Exception as e:
+            pass
+
         # Physical QWERTY to vector mappings (dx, dy, scroll_dy)
         self.key_map: Dict[str, Tuple[int, int, int]] = {
             'i': (0, -5, 0),  # -P = Up
