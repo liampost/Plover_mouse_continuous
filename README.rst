@@ -16,7 +16,7 @@ Installation
 1. Open the Plover Plugin Manager.
 2. Click the advanced/gear icon to install from a URL.
 3. Use your GitHub URL: ``git+https://github.com/liampost/Plover_mouse_continuous.git``
-4. **Enable the Extension:** Go to `Plover Configuration` -> `Plugins`, and check the box next to `plover_mouse`.
+4. **Enable the Extension:** Go to `Plover Configuration` -> `Plugins`, and check the box next to `plover_mouse_continuous`.
 
 Configuration
 -------------
