@@ -93,16 +93,11 @@ def mouse_click(engine: StenoEngine, args: str):
 
 # --- Extention Plugin for Continuous Movement ---
 
-def _is_key_pressed(char: str) -> bool:
-    """Uses native Windows GetAsyncKeyState to check physical key state."""
-    vk = ctypes.windll.user32.VkKeyScanW(ord(char)) & 0xFF
-    return (ctypes.windll.user32.GetAsyncKeyState(vk) & 0x8000) != 0
-
 class PloverMouseExtension:
     """
-    A Plover Extension plugin that uses GetAsyncKeyState to provide
-    smooth, continuous mouse movement and scrolling while the keys are held down.
-    Allows specifying modifier keys that must be held to activate movement.
+    A Plover Extension plugin that hooks directly into Plover's StenoEngine
+    to capture key_down and key_up events since Plover's LowLevel keyboard
+    hook absorbs them from Windows natively.
     """
 
     def __init__(self, engine: StenoEngine):
@@ -110,20 +105,9 @@ class PloverMouseExtension:
         self._running = False
         self._thread = None
         
-        # Dump engine internals to discover how to read keystates
-        dump_path = r'C:\Users\postw\OneDrive\Documents\Coding\MISC\Plover_plugins\plover_mouse_continuous\engine_dump.txt'
-        try:
-            with open(dump_path, 'w') as f:
-                f.write("ENGINE DIR:\n")
-                f.write(str(dir(engine)))
-                f.write("\n\nMACHINE DIR:\n")
-                if hasattr(engine, 'machine'):
-                    f.write(str(dir(engine.machine)))
-                    f.write("\n\nKEYMAP DIR:\n")
-                    if hasattr(engine.machine, 'keymap'):
-                        f.write(str(dir(engine.machine.keymap)))
-        except Exception as e:
-            pass
+        self.active_dx = 0
+        self.active_dy = 0
+        self.active_scroll_y = 0
 
         # Physical QWERTY to vector mappings (dx, dy, scroll_dy)
         self.key_map: Dict[str, Tuple[int, int, int]] = {
@@ -137,7 +121,12 @@ class PloverMouseExtension:
         
         # Keys that MUST be held down to activate movement
         self.modifier_keys: List[str] = ['a', 's', 'e', 'f']
+        self.pressed_keys = set()
         
+        # We need to hook the engine's original key callbacks
+        self._original_key_down = None
+        self._original_key_up = None
+
         self.load_config()
 
     def load_config(self):
@@ -164,38 +153,71 @@ class PloverMouseExtension:
 
     def start(self):
         self._running = True
+        
+        # Hook into Plover's keyboard machine directly to steal key state
+        if hasattr(self.engine, '_machine') and hasattr(self.engine._machine, 'key_down'):
+            self._original_key_down = self.engine._machine.key_down
+            self._original_key_up = self.engine._machine.key_up
+            
+            # Monkey path the callbacks
+            self.engine._machine.key_down = self._hook_key_down
+            self.engine._machine.key_up = self._hook_key_up
+            
         self._thread = threading.Thread(target=self._movement_loop, daemon=True)
         self._thread.start()
 
     def stop(self):
         self._running = False
+        
+        # Unhook
+        if self._original_key_down and hasattr(self.engine, '_machine'):
+            self.engine._machine.key_down = self._original_key_down
+            self.engine._machine.key_up = self._original_key_up
+            
         if self._thread:
             self._thread.join(timeout=1.0)
             
+    def _hook_key_down(self, key: str) -> None:
+        char = key.lower()
+        if char not in self.pressed_keys:
+            self.pressed_keys.add(char)
+            if char in self.key_map:
+                dx, dy, sdy = self.key_map[char]
+                self.active_dx += dx
+                self.active_dy += dy
+                self.active_scroll_y += sdy
+                
+        # Always call the original so Steno keeps working!
+        if self._original_key_down:
+            self._original_key_down(key)
+
+    def _hook_key_up(self, key: str) -> None:
+        char = key.lower()
+        if char in self.pressed_keys:
+            self.pressed_keys.remove(char)
+            if char in self.key_map:
+                dx, dy, sdy = self.key_map[char]
+                self.active_dx -= dx
+                self.active_dy -= dy
+                self.active_scroll_y -= sdy
+                
+        # Always call the original so Steno keeps working!
+        if self._original_key_up:
+            self._original_key_up(key)
+
     def _modifiers_active(self) -> bool:
         if not self.modifier_keys:
             return True
-        return all(_is_key_pressed(mod) for mod in self.modifier_keys)
+        return all(mod in self.pressed_keys for mod in self.modifier_keys)
 
     def _movement_loop(self):
         while self._running:
             if self._modifiers_active():
-                active_dx = 0
-                active_dy = 0
-                active_scroll_y = 0
+                if self.active_dx != 0 or self.active_dy != 0:
+                    _send_mouse_input(MOUSEEVENTF_MOVE, dx=self.active_dx, dy=self.active_dy)
                 
-                # Poll movement keys
-                for char, (dx, dy, sdy) in self.key_map.items():
-                    if _is_key_pressed(char):
-                        active_dx += dx
-                        active_dy += dy
-                        active_scroll_y += sdy
-                
-                if active_dx != 0 or active_dy != 0:
-                    _send_mouse_input(MOUSEEVENTF_MOVE, dx=active_dx, dy=active_dy)
-                
-                if active_scroll_y != 0:
-                    _send_mouse_input(MOUSEEVENTF_WHEEL, data=active_scroll_y * 15)
+                if self.active_scroll_y != 0:
+                    _send_mouse_input(MOUSEEVENTF_WHEEL, data=self.active_scroll_y * 15)
                 
             time.sleep(0.01)
 
