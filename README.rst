@@ -1,51 +1,43 @@
-Plover mouse
-============
+Plover Continuous Mouse
+=======================
 
-Control the mouse with Plover.
+A true "hold-to-move" continuous mouse movement plugin for Plover. 
 
-Commands
---------
+Unlike standard Plover command dictionaries which only execute once per stroke release, this plugin functions as an **Extension** that intercepts your raw keyboard events (NKRO) to provide smooth, continuous mouse pointer movement and scrolling *while* keys are being held down.
 
-``{PLOVER:mouse_move:x,y}``: Move the mouse cursor relative to its current position.
+Requirements
+------------
+1. Plover (4.0.0.dev or later)
+2. An **NKRO Keyboard** or a split keyboard operating as a standard "Keyboard" machine in Plover's configuration. 
+*(Note: Serial Steno protocols like TX Bolt or Gemini PR that only output strokes upon key release are physically incompatible with true hold-to-move).*
 
-``{PLOVER:mouse_position:x,y}``: Move the mouse cursor to absolute coordinates x, y. Coordinates can be omitted, e.g. ``{PLOVER:mouse_position:,1000}``.
+Installation
+------------
+1. Open the Plover Plugin Manager.
+2. Click the advanced/gear icon to install from a URL.
+3. Use your GitHub URL: ``git+https://github.com/liampost/Plover_mouse_continuous.git``
+4. **Enable the Extension:** Go to `Plover Configuration` -> `Plugins`, and check the box next to `plover_mouse`.
 
-``{PLOVER:mouse_scroll:x,y}``: Perform a mouse scroll.
+Configuration
+-------------
+Because this plugin intercepts raw keys before Plover translates them, it **cannot** be configured via standard Plover dictionaries (like `{PLOVER:mouse_move}`).
 
-``{PLOVER:mouse_click:button,clicks}``: Click a mouse button a number of times. Button can be ``left``, ``right``, or ``middle``.
+Instead, movement is configured in a file named ``mouse_config.json`` which is generated automatically in the plugin folder when you first enable it.
 
-``{PLOVER:mouse_press:button}``: Press and hold a mouse button. Button can be ``left``, ``right``, or ``middle``.
-
-``{PLOVER:mouse_release:button}``: Release a mouse button. Button can be ``left``, ``right``, or ``middle``.
-
-Example dictionary
-------------------
+The default configuration maps movement to standard QWERTY keys (which your Steno machine is simulating when you press its physical keys):
 
 .. code:: json
 
-	{
-	"SKPR-R": "{PLOVER:mouse_move:-10}",
-	"SKPR-P": "{PLOVER:mouse_move:,-10}",
-	"SKPR-B": "{PLOVER:mouse_move:,10}",
-	"SKPR-G": "{PLOVER:mouse_move:10}",
-	"SKPR-RP": "{PLOVER:mouse_move:-10,-10}",
-	"SKPR-RB": "{PLOVER:mouse_move:-10,10}",
-	"SKPR-PG": "{PLOVER:mouse_move:10,-10}",
-	"SKPR-BG": "{PLOVER:mouse_move:10,10}",
-	"SKPR-F": "{PLOVER:mouse_click:}",
-	"SKPR*F": "{PLOVER:mouse_click:,2}",
-	"SKPR-L": "{PLOVER:mouse_click:right}",
-	"SKPR-T": "{PLOVER:mouse_press:left}",
-	"SKPR-S": "{PLOVER:mouse_release:left}",
-	"SKPR-D": "{PLOVER:mouse_position:1000}",
-	"SKPR-Z": "{PLOVER:mouse_position:,1000}",
-	"SKPROR": "{PLOVER:mouse_scroll:-1}",
-	"SKPROP": "{PLOVER:mouse_scroll:,1}",
-	"SKPROB": "{PLOVER:mouse_scroll:,-1}",
-	"SKPROG": "{PLOVER:mouse_scroll:1}",
-	"SKPRORP": "{PLOVER:mouse_scroll:-1,1}",
-	"SKPRORB": "{PLOVER:mouse_scroll:-1,-1}",
-	"SKPROPG": "{PLOVER:mouse_scroll:1,1}",
-	"SKPROBG": "{PLOVER:mouse_scroll:1,-1}"
-	}
+    {
+        "e": [0, -5, 0],   // Up
+        "d": [0, 5, 0],    // Down
+        "s": [-5, 0, 0],   // Left
+        "f": [5, 0, 0],    // Right
+        "r": [0, 0, 1],    // Scroll Up
+        "v": [0, 0, -1]    // Scroll Down
+    }
+
+The format is ``"qwerty_key": [delta_x, delta_y, scroll_delta]``. 
+You can edit ``mouse_config.json`` to map these movements to whichever physical keys on your split keyboard you prefer to use for mouse operations. You can combine keys (e.g. holding 'e' and 's' moves diagonally up-left).
+
 
