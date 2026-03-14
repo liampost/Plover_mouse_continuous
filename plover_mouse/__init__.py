@@ -2,7 +2,7 @@ import json
 import os
 import threading
 import time
-from typing import Dict, Tuple
+from typing import Dict, Tuple, List
 
 from pynput import keyboard
 from plover.engine import StenoEngine
@@ -52,13 +52,49 @@ class INPUT(ctypes.Structure):
                 ("union", INPUT_UNION))
 
 def _send_mouse_input(flags, dx=0, dy=0, data=0):
-    x = INPUT(type=INPUT_MOUSE, union=INPUT_UNION(mi=MOUSEINPUT(dx, dy, data, flags, 0, None)))
+    x = INPUT(type=INPUT_MOUSE, union=INPUT_UNION(mi=MOUSEINPUT(int(dx), int(dy), int(data), int(flags), 0, None)))
     ctypes.windll.user32.SendInput(1, ctypes.byref(x), ctypes.sizeof(x))
+
+# --- Standard Plover Commands for Clicking ---
+
+def mouse_press(engine: StenoEngine, args: str):
+    args = args.strip().lower()
+    flag = MOUSEEVENTF_LEFTDOWN
+    if args == 'right': flag = MOUSEEVENTF_RIGHTDOWN
+    elif args == 'middle': flag = MOUSEEVENTF_MIDDLEDOWN
+    _send_mouse_input(flag)
+
+def mouse_release(engine: StenoEngine, args: str):
+    args = args.strip().lower()
+    flag = MOUSEEVENTF_LEFTUP
+    if args == 'right': flag = MOUSEEVENTF_RIGHTUP
+    elif args == 'middle': flag = MOUSEEVENTF_MIDDLEUP
+    _send_mouse_input(flag)
+
+def mouse_click(engine: StenoEngine, args: str):
+    args2 = args.split(",")
+    args2 = [x.strip().lower() for x in args2] + [""] * (2 - len(args2))
+    btn = args2[0]
+    clicks = 1 if(args2[1] == "") else int(args2[1])
+    
+    down_flag = MOUSEEVENTF_LEFTDOWN
+    up_flag = MOUSEEVENTF_LEFTUP
+    if btn == 'right':
+        down_flag, up_flag = MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP
+    elif btn == 'middle':
+        down_flag, up_flag = MOUSEEVENTF_MIDDLEDOWN, MOUSEEVENTF_MIDDLEUP
+
+    for _ in range(clicks):
+        _send_mouse_input(down_flag)
+        _send_mouse_input(up_flag)
+
+# --- Extention Plugin for Continuous Movement ---
 
 class PloverMouseExtension:
     """
     A Plover Extension plugin that intercepts raw QWERTY keys to provide
     smooth, continuous mouse movement and scrolling while the keys are held down.
+    Allows specifying modifier keys that must be held to activate movement.
     """
 
     def __init__(self, engine: StenoEngine):
@@ -67,25 +103,22 @@ class PloverMouseExtension:
         self._thread = None
         self._listener = None
         
-        # Current aggregated deltas based on keys currently held down
         self.active_dx = 0
         self.active_dy = 0
         self.active_scroll_y = 0
 
-        # Physical QWERTY to vector mappings (Customizable)
-        # Default mapping:
-        # e: Up, d: Down, s: Left, f: Right 
-        # (These are common left-hand resting keys, adjust as needed)
+        # Physical QWERTY to vector mappings (dx, dy, scroll_dy)
         self.key_map: Dict[str, Tuple[int, int, int]] = {
-            'e': (0, -5, 0),  # dx, dy, scroll_dy
-            'd': (0, 5, 0),
-            's': (-5, 0, 0),
-            'f': (5, 0, 0),
-            'r': (0, 0, 1),   # Scroll Up
-            'v': (0, 0, -1)   # Scroll Down
+            'h': (0, -5, 0),  # Right Hand R (-R) = Up
+            'u': (0, 5, 0),   # Right Hand P (-P) = Down
+            'j': (-5, 0, 0),  # Right Hand B (-B) = Left
+            'k': (5, 0, 0),   # Right Hand G (-G) = Right
         }
+        
+        # Keys that MUST be held down to activate movement
+        # e.g., 'a' (S), 's' (K), 'e' (P), 'f' (R) for left hand SKPR
+        self.modifier_keys: List[str] = ['a', 's', 'e', 'f']
 
-        # Track keys currently pressed to avoid compounding speeds from OS auto-repeat
         self.pressed_keys = set()
         
         self.load_config()
@@ -95,30 +128,28 @@ class PloverMouseExtension:
         if os.path.exists(config_path):
             try:
                 with open(config_path, 'r') as f:
-                    # Convert str keys and list values to proper formats
-                    loaded_map = json.load(f)
-                    self.key_map = {k: tuple(v) for k, v in loaded_map.items()}
+                    data = json.load(f)
+                    if "modifiers" in data:
+                        self.modifier_keys = data["modifiers"]
+                    if "keys" in data:
+                        self.key_map = {k: tuple(v) for k, v in data["keys"].items()}
             except Exception as e:
                 print(f"Plover Mouse: Error loading config {e}")
         else:
-            # Create default config if it doesn't exist
             try:
                 with open(config_path, 'w') as f:
-                    json.dump({k: list(v) for k,v in self.key_map.items()}, f, indent=4)
+                    json.dump({
+                        "modifiers": self.modifier_keys,
+                        "keys": {k: list(v) for k,v in self.key_map.items()}
+                    }, f, indent=4)
             except:
                 pass
 
     def start(self):
         self._running = True
-        
-        # Start the background movement thread
         self._thread = threading.Thread(target=self._movement_loop, daemon=True)
         self._thread.start()
-        
-        # Start the global keyboard listener
-        self._listener = keyboard.Listener(
-            on_press=self.on_press,
-            on_release=self.on_release)
+        self._listener = keyboard.Listener(on_press=self.on_press, on_release=self.on_release)
         self._listener.start()
 
     def stop(self):
@@ -127,40 +158,47 @@ class PloverMouseExtension:
             self._listener.stop()
         if self._thread:
             self._thread.join(timeout=1.0)
+            
+    def _modifiers_active(self) -> bool:
+        if not self.modifier_keys:
+            return True
+        return all(mod in self.pressed_keys for mod in self.modifier_keys)
 
     def on_press(self, key):
         try:
             char = key.char.lower()
-            if char in self.key_map and char not in self.pressed_keys:
+            if char not in self.pressed_keys:
                 self.pressed_keys.add(char)
-                dx, dy, sdy = self.key_map[char]
-                self.active_dx += dx
-                self.active_dy += dy
-                self.active_scroll_y += sdy
+                if char in self.key_map:
+                    dx, dy, sdy = self.key_map[char]
+                    self.active_dx += dx
+                    self.active_dy += dy
+                    self.active_scroll_y += sdy
         except AttributeError:
-            pass # Non-character keys
+            pass
 
     def on_release(self, key):
         try:
             char = key.char.lower()
-            if char in self.key_map and char in self.pressed_keys:
+            if char in self.pressed_keys:
                 self.pressed_keys.remove(char)
-                dx, dy, sdy = self.key_map[char]
-                self.active_dx -= dx
-                self.active_dy -= dy
-                self.active_scroll_y -= sdy
+                if char in self.key_map:
+                    dx, dy, sdy = self.key_map[char]
+                    self.active_dx -= dx
+                    self.active_dy -= dy
+                    self.active_scroll_y -= sdy
         except AttributeError:
             pass
 
     def _movement_loop(self):
-        """Background thread that continuously applies movement based on active deltas."""
         while self._running:
-            if self.active_dx != 0 or self.active_dy != 0:
-                _send_mouse_input(MOUSEEVENTF_MOVE, dx=self.active_dx, dy=self.active_dy)
-            
-            if self.active_scroll_y != 0:
-                # Scroll amount multiplier (120 per click standard)
-                _send_mouse_input(MOUSEEVENTF_WHEEL, data=self.active_scroll_y * 15)
+            if self._modifiers_active():
+                if self.active_dx != 0 or self.active_dy != 0:
+                    _send_mouse_input(MOUSEEVENTF_MOVE, dx=self.active_dx, dy=self.active_dy)
                 
-            time.sleep(0.01) # 100fps movement for smoothness
+                if self.active_scroll_y != 0:
+                    _send_mouse_input(MOUSEEVENTF_WHEEL, data=self.active_scroll_y * 15)
+                
+            time.sleep(0.01)
+
 
