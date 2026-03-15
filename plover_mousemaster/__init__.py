@@ -14,9 +14,13 @@ def mm_init(engine: StenoEngine, args: str):
         
     if os.path.exists(MOUSEMASTER_EXE):
         try:
-            # We start it detached
-            _mm_process = subprocess.Popen([MOUSEMASTER_EXE], cwd=os.path.dirname(MOUSEMASTER_EXE), 
-                                           creationflags=0x08000000) # CREATE_NO_WINDOW
+            # shell=True and CREATE_NO_WINDOW ensures it completely detaches
+            _mm_process = subprocess.Popen(
+                [MOUSEMASTER_EXE], 
+                cwd=os.path.dirname(MOUSEMASTER_EXE), 
+                shell=False,
+                creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0x08000000)
+            )
         except Exception as e:
             print(f"Failed to start MouseMaster: {e}")
 
