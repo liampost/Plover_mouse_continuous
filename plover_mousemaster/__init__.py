@@ -26,11 +26,13 @@ def mm_init(engine: StenoEngine, args: str):
         except Exception as e:
             print(f"Failed to start MouseMaster: {e}")
 
+import time
+
 def _send_vk(vk_code):
-    # Map raw virtual key to scan code, which hooks like MouseMaster require
     scan_code = ctypes.windll.user32.MapVirtualKeyA(vk_code, 0)
     # key down
     ctypes.windll.user32.keybd_event(vk_code, scan_code, 0, 0)
+    time.sleep(0.01)
     # key up
     ctypes.windll.user32.keybd_event(vk_code, scan_code, 2, 0)
 
