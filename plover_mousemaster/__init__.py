@@ -7,15 +7,18 @@ MOUSEMASTER_EXE = r"C:\Users\postw\OneDrive\Documents\Coding\MISC\Plover_plugins
 _mm_process = None
 
 def mm_init(engine: StenoEngine, args: str):
-    global _mm_process
-    
-    # os.startfile is fire-and-forget, so we don't need to poll it.
+    # Check if MouseMaster is already running using Windows tasklist
+    try:
+        output = subprocess.check_output('tasklist /FI "IMAGENAME eq mousemaster.exe"', shell=True).decode()
+        if 'mousemaster.exe' in output.lower():
+            # Already running, do nothing
+            return
+    except subprocess.CalledProcessError:
+        pass
         
     if os.path.exists(MOUSEMASTER_EXE):
         try:
-            # os.startfile is the most native, bulletproof way to launch a detached Windows executable
             cwd = os.path.dirname(MOUSEMASTER_EXE)
-            # Change directory temporarily so mousemaster finds its properties file
             original_cwd = os.getcwd()
             os.chdir(cwd)
             os.startfile(MOUSEMASTER_EXE)
