@@ -3,28 +3,18 @@ import os
 import ctypes
 from plover.engine import StenoEngine
 
-MOUSEMASTER_EXE = r"C:\Users\postw\OneDrive\Documents\Coding\MISC\Plover_plugins\mousemaster.exe"
-_mm_process = None
+MOUSEMASTER_LAUNCHER = r"C:\Users\postw\OneDrive\Documents\Coding\MISC\Plover_plugins\mousemaster_launcher.vbs"
 
 def mm_init(engine: StenoEngine, args: str):
-    # Check if MouseMaster is already running using Windows tasklist
-    try:
-        output = subprocess.check_output('tasklist /FI "IMAGENAME eq mousemaster.exe"', shell=True).decode()
-        if 'mousemaster.exe' in output.lower():
-            # Already running, do nothing
-            return
-    except subprocess.CalledProcessError:
-        pass
-        
-    if os.path.exists(MOUSEMASTER_EXE):
+    if os.path.exists(MOUSEMASTER_LAUNCHER):
         try:
-            cwd = os.path.dirname(MOUSEMASTER_EXE)
+            cwd = os.path.dirname(MOUSEMASTER_LAUNCHER)
             original_cwd = os.getcwd()
             os.chdir(cwd)
-            os.startfile(MOUSEMASTER_EXE)
+            os.startfile(MOUSEMASTER_LAUNCHER)
             os.chdir(original_cwd)
         except Exception as e:
-            print(f"Failed to start MouseMaster: {e}")
+            print(f"Failed to start MouseMaster Launcher: {e}")
 
 import time
 
