@@ -1,21 +1,19 @@
-from PyQt5.QtWidgets import QMainWindow, QApplication
+from PyQt5.QtWidgets import QWidget, QApplication
 from PyQt5.QtCore import Qt, QRect
 from PyQt5.QtGui import QPainter, QPen, QColor, QFont
 import sys
 
-class OverlayWindow(QMainWindow):
+class OverlayWindow(QWidget):
     def __init__(self):
         super().__init__()
         self.setWindowFlags(
             Qt.WindowStaysOnTopHint |
             Qt.FramelessWindowHint |
             Qt.Tool |
-            Qt.WindowTransparentForInput |
-            Qt.WindowDoesNotAcceptFocus
+            Qt.WindowTransparentForInput
         )
         self.setAttribute(Qt.WA_TranslucentBackground)
         self.setAttribute(Qt.WA_NoSystemBackground)
-        self.setAttribute(Qt.WA_ShowWithoutActivating)
         
         self.grid_visible = False
         self.grid_rect = QRect()
@@ -49,6 +47,9 @@ class OverlayWindow(QMainWindow):
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
+        
+        # Fill with an almost-invisible background so Windows registers the translucent region
+        painter.fillRect(self.rect(), QColor(0, 0, 0, 1))
 
         if self.grid_visible:
             self.draw_grid(painter)
