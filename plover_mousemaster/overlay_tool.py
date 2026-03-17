@@ -107,6 +107,13 @@ class OverlayTool(Tool):
         geo = self.geometry()
         return abs_x - geo.x(), abs_y - geo.y()
 
+    def _send_backspace(self):
+        """Send a backspace keystroke to undo a letter Plover just output."""
+        VK_BACK = 0x08
+        KEYEVENTF_KEYUP = 0x0002
+        ctypes.windll.user32.keybd_event(VK_BACK, 0, 0, 0)
+        ctypes.windll.user32.keybd_event(VK_BACK, 0, KEYEVENTF_KEYUP, 0)
+
     def _on_translated(self, old, new):
         """Called when Plover translates a stroke to text output."""
         if not self._hint_active:
@@ -123,6 +130,8 @@ class OverlayTool(Tool):
                 if len(text) == 1 and text.isalpha():
                     letter = text.lower()
                     _log(f"Hint capture: letter='{letter}', prefix='{self._hint_prefix}'")
+                    # Undo the letter that Plover already typed
+                    self._send_backspace()
                     self._process_hint_letter(letter)
 
     def _process_hint_letter(self, letter):
