@@ -175,14 +175,14 @@ class HintManager:
         except:
             pass
 
-        # De-duplicate with 40px distance
+        # De-duplicate with 15px distance
         unique_elements = []
         for ex, ey in clickable_elements:
             is_duplicate = False
             for ux, uy in unique_elements:
                 dx = ex - ux
                 dy = ey - uy
-                if dx * dx + dy * dy < 40 * 40:
+                if dx * dx + dy * dy < 15 * 15:
                     is_duplicate = True
                     break
             if not is_duplicate:
