@@ -6,7 +6,7 @@ from plover.engine import StenoEngine
 from plover.gui_qt.tool import Tool
 
 from PySide6.QtWidgets import QApplication
-from PySide6.QtCore import Qt, QRect, Slot, QTimer
+from PySide6.QtCore import Qt, QRect, Slot, QTimer, QPoint
 from PySide6.QtGui import QPainter, QPen, QColor, QFont, QCursor
 
 from .mouse_control import MouseControl
@@ -36,14 +36,14 @@ class OverlayTool(Tool):
         self._engine = engine
 
         self.grid_visible = False
-        self.grid_rect = QRect()
-        self.all_hints = []       # Full list of (x, y, label) from scan
-        self.visible_hints = []   # Filtered list currently displayed
+        self.grid_rect = QRect()       # absolute screen coords
+        self.all_hints = []            # full list of (x, y, label) - absolute coords
+        self.visible_hints = []        # filtered list currently displayed
         self._hint_active = False
         self._hint_prefix = ""
-        self._hint_manager = None  # Set externally after scan
+        self._hint_manager = None      # set externally after scan
 
-        # Make it frameless, always on top, translucent
+        # Make it frameless, always on top, translucent, click-through
         self.setWindowFlags(
             Qt.WindowStaysOnTopHint |
             Qt.FramelessWindowHint |
@@ -74,6 +74,11 @@ class OverlayTool(Tool):
         _register_overlay(self)
         _log("OverlayTool registered globally")
 
+    def _to_local(self, abs_x, abs_y):
+        """Convert absolute screen coordinates to widget-local coordinates."""
+        geo = self.geometry()
+        return abs_x - geo.x(), abs_y - geo.y()
+
     def _on_translated(self, old, new):
         """Called when Plover translates a stroke to text output."""
         if not self._hint_active:
@@ -81,17 +86,15 @@ class OverlayTool(Tool):
         if not new:
             return
 
-        # Extract the text that was just output
         for action in new:
             if hasattr(action, 'text') and action.text:
                 text = action.text.strip()
                 if not text:
                     continue
-                    
-                # We only care about single lowercase letters
+                # We care about single letters (Plover outputs lowercase for standard strokes)
                 if len(text) == 1 and text.isalpha():
                     letter = text.lower()
-                    _log(f"Hint capture: letter='{letter}', current prefix='{self._hint_prefix}'")
+                    _log(f"Hint capture: letter='{letter}', prefix='{self._hint_prefix}'")
                     self._process_hint_letter(letter)
 
     def _process_hint_letter(self, letter):
@@ -102,27 +105,24 @@ class OverlayTool(Tool):
         # Restart the timeout
         self._hint_timer.start()
 
-        # Check if we have an exact match
-        from .hints import HintManager
+        # Check for exact match
         if self._hint_manager:
             coord = self._hint_manager.get_coordinate(self._hint_prefix)
             if coord:
                 _log(f"Hint match! prefix='{self._hint_prefix}', coord={coord}")
-                # Move and click
                 MouseControl.move_to(coord[0], coord[1])
                 MouseControl.click('left')
                 self._close_hints()
                 return
 
-        # Filter visible hints to only those starting with current prefix
+        # Filter visible hints to those starting with current prefix
         self.visible_hints = [
             (x, y, label) for x, y, label in self.all_hints
             if label.startswith(self._hint_prefix)
         ]
-        _log(f"Filtered hints to {len(self.visible_hints)} matching prefix '{self._hint_prefix}'")
+        _log(f"Filtered to {len(self.visible_hints)} hints matching '{self._hint_prefix}'")
 
         if len(self.visible_hints) == 0:
-            # No matches, close hints
             _log("No matching hints, closing")
             self._close_hints()
             return
@@ -130,12 +130,10 @@ class OverlayTool(Tool):
         self.update()
 
     def _on_hint_timeout(self):
-        """Called when hint mode times out after 5 seconds of inactivity."""
         _log("Hint mode timed out")
         self._close_hints()
 
     def _close_hints(self):
-        """Close hint mode and reset state."""
         self._hint_active = False
         self._hint_prefix = ""
         self.all_hints = []
@@ -147,21 +145,29 @@ class OverlayTool(Tool):
         self.hide()
 
     @Slot()
-    def set_active_screen_from_cursor(self):
-        """Resize overlay to cover the monitor that the cursor is currently on."""
+    def move_to_cursor_screen(self):
+        """Resize and reposition overlay to cover the monitor the cursor is on."""
         cursor_pos = QCursor.pos()
         screen = QApplication.screenAt(cursor_pos)
         if screen is None:
             screen = QApplication.primaryScreen()
         if screen:
-            self.setGeometry(screen.geometry())
-            _log(f"Overlay moved to screen: {screen.geometry()}")
+            geo = screen.geometry()
+            _log(f"Moving overlay to screen: {geo}")
+            self.setGeometry(geo)
 
     @Slot(QRect)
     def show_grid(self, rect):
-        _log(f"show_grid called, rect={rect}")
-        self.set_active_screen_from_cursor()
-        self.grid_rect = rect
+        _log(f"show_grid rect={rect}")
+        # Move overlay to the screen containing the grid rect center
+        center = rect.center()
+        screen = QApplication.screenAt(center)
+        if screen is None:
+            screen = QApplication.primaryScreen()
+        if screen:
+            self.setGeometry(screen.geometry())
+        
+        self.grid_rect = rect  # stored in absolute screen coords
         self.grid_visible = True
         self.show()
         self.raise_()
@@ -174,9 +180,8 @@ class OverlayTool(Tool):
 
     @Slot()
     def activate_hints(self):
-        """Start hint mode — hints should already be set via all_hints."""
-        _log(f"activate_hints: {len(self.all_hints)} hints, active={self._hint_active}")
-        self.set_active_screen_from_cursor()
+        _log(f"activate_hints: {len(self.all_hints)} hints")
+        self.move_to_cursor_screen()
         self._hint_active = True
         self._hint_prefix = ""
         self.visible_hints = list(self.all_hints)
@@ -187,7 +192,6 @@ class OverlayTool(Tool):
 
     @Slot()
     def deactivate_hints(self):
-        """Manually close hint mode."""
         self._close_hints()
 
     def paintEvent(self, event):
@@ -205,47 +209,68 @@ class OverlayTool(Tool):
         pen.setWidth(2)
         painter.setPen(pen)
 
-        r = self.grid_rect
-        painter.drawLine(r.left(), r.center().y(), r.right(), r.center().y())
-        painter.drawLine(r.center().x(), r.top(), r.center().x(), r.bottom())
-        painter.drawRect(r)
+        # Convert absolute grid rect to widget-local coordinates
+        geo = self.geometry()
+        local_rect = QRect(
+            self.grid_rect.x() - geo.x(),
+            self.grid_rect.y() - geo.y(),
+            self.grid_rect.width(),
+            self.grid_rect.height()
+        )
+
+        # Draw crosshairs
+        painter.drawLine(local_rect.left(), local_rect.center().y(),
+                         local_rect.right(), local_rect.center().y())
+        painter.drawLine(local_rect.center().x(), local_rect.top(),
+                         local_rect.center().x(), local_rect.bottom())
+        painter.drawRect(local_rect)
 
     def _draw_hints(self, painter):
         font = QFont("Arial", 14, QFont.Bold)
         painter.setFont(font)
-
-        # Get the overlay's geometry offset (for multi-monitor coordinate mapping)
         geo = self.geometry()
 
         for x, y, label in self.visible_hints:
-            # Convert absolute screen coords to widget-relative coords
-            rel_x = x - geo.x()
-            rel_y = y - geo.y()
+            # Convert absolute screen coords to widget-local
+            lx = x - geo.x()
+            ly = y - geo.y()
 
             text_rect = painter.fontMetrics().boundingRect(label)
-            text_rect.moveCenter(QRect(rel_x, rel_y, 1, 1).center())
+            text_rect.moveCenter(QPoint(lx, ly))
             text_rect.adjust(-5, -5, 5, 5)
 
+            # Background box
             painter.setBrush(QColor(0, 0, 0, 180))
             painter.setPen(Qt.NoPen)
             painter.drawRect(text_rect)
 
-            # Highlight the already-typed prefix in yellow, rest in white
             prefix_len = len(self._hint_prefix)
-            
-            # Draw the full label first in white
-            painter.setPen(QColor(255, 255, 255))
-            painter.drawText(text_rect, Qt.AlignCenter, label)
-            
-            # If we have a prefix, overdraw it in yellow
+
             if prefix_len > 0 and label.startswith(self._hint_prefix):
-                prefix_text = label[:prefix_len]
-                # Calculate the prefix portion position
-                prefix_rect = painter.fontMetrics().boundingRect(prefix_text)
-                prefix_rect.moveTopLeft(text_rect.topLeft())
-                prefix_rect.adjust(5, 5, 5, 0)  # manual alignment adjustment
+                # Draw already-typed prefix in yellow
+                prefix_part = label[:prefix_len]
+                remaining = label[prefix_len:]
+                
+                # Full text metrics for positioning
+                fm = painter.fontMetrics()
+                prefix_width = fm.horizontalAdvance(prefix_part)
+                total_width = fm.horizontalAdvance(label)
+                
+                # Center the full label text
+                text_x = text_rect.center().x() - total_width // 2
+                text_y = text_rect.center().y() + fm.ascent() // 2
+                
+                # Draw prefix in yellow
                 painter.setPen(QColor(255, 255, 0))
-                painter.drawText(prefix_rect.topLeft(), prefix_text)
+                painter.drawText(text_x, text_y, prefix_part)
+                
+                # Draw remaining in white
+                painter.setPen(QColor(255, 255, 255))
+                painter.drawText(text_x + prefix_width, text_y, remaining)
+            else:
+                # Draw full label in white
+                painter.setPen(QColor(255, 255, 255))
+                painter.drawText(text_rect, Qt.AlignCenter, label)
 
 
 # ---- Global instance registry ----
