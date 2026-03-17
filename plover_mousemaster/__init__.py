@@ -5,6 +5,7 @@ except ImportError:
 
 from PyQt5.QtWidgets import QApplication
 from PyQt5.QtCore import QRect
+from PyQt5 import sip
 from .overlay import OverlayWindow
 from .mouse_control import MouseControl
 import sys
@@ -16,7 +17,7 @@ _is_dragging = False
 
 def get_overlay():
     global _overlay
-    if _overlay is None:
+    if _overlay is None or sip.isdeleted(_overlay):
         app = QApplication.instance()
         if app is None:
             app = QApplication(sys.argv)
