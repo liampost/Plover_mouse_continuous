@@ -13,6 +13,7 @@ from .mouse_control import MouseControl
 
 import os
 import threading
+import ctypes
 
 _DEBUG_LOG = os.path.join(os.path.expanduser("~"), "plover_mouse_debug.log")
 
@@ -67,12 +68,39 @@ class OverlayTool(Tool):
         self._hint_timer.setInterval(5000)
         self._hint_timer.timeout.connect(self._on_hint_timeout)
 
+        # 10-second inactivity timeout for grid mode
+        self._grid_timer = QTimer(self)
+        self._grid_timer.setSingleShot(True)
+        self._grid_timer.setInterval(10000)
+        self._grid_timer.timeout.connect(self._on_grid_timeout)
+
+        # Z-order enforcement timer - keep overlay on top
+        self._topmost_timer = QTimer(self)
+        self._topmost_timer.setInterval(200)
+        self._topmost_timer.timeout.connect(self._enforce_topmost)
+
         # Hook into Plover's translated output for natural letter capture
         engine.signal_connect("translated", self._on_translated)
 
         # Register globally so command plugins can find us
         _register_overlay(self)
         _log("OverlayTool registered globally")
+
+    def _enforce_topmost(self):
+        """Periodically force the overlay to stay on top of all windows."""
+        if self.isVisible():
+            try:
+                hwnd = int(self.winId())
+                HWND_TOPMOST = -1
+                SWP_NOMOVE = 0x0002
+                SWP_NOSIZE = 0x0001
+                SWP_NOACTIVATE = 0x0010
+                ctypes.windll.user32.SetWindowPos(
+                    hwnd, HWND_TOPMOST, 0, 0, 0, 0,
+                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE
+                )
+            except:
+                pass
 
     def _to_local(self, abs_x, abs_y):
         """Convert absolute screen coordinates to widget-local coordinates."""
@@ -91,7 +119,7 @@ class OverlayTool(Tool):
                 text = action.text.strip()
                 if not text:
                     continue
-                # We care about single letters (Plover outputs lowercase for standard strokes)
+                # Single letters for hint input
                 if len(text) == 1 and text.isalpha():
                     letter = text.lower()
                     _log(f"Hint capture: letter='{letter}', prefix='{self._hint_prefix}'")
@@ -109,13 +137,26 @@ class OverlayTool(Tool):
         if self._hint_manager:
             coord = self._hint_manager.get_coordinate(self._hint_prefix)
             if coord:
-                _log(f"Hint match! prefix='{self._hint_prefix}', coord={coord}")
-                MouseControl.move_to(coord[0], coord[1])
-                MouseControl.click('left')
-                self._close_hints()
-                return
+                # Check if there are OTHER labels that start with this prefix
+                # If not, it's an unambiguous match — go ahead and click
+                matching = self._hint_manager.get_matching_labels(self._hint_prefix)
+                if len(matching) == 1:
+                    _log(f"Hint match! prefix='{self._hint_prefix}', coord={coord}")
+                    MouseControl.move_to(coord[0], coord[1])
+                    MouseControl.click('left')
+                    self._close_hints()
+                    return
+                # If there are multiple matches (e.g. 'a' matches 'a' and 'ab'),
+                # this can only happen with mixed-length labels.
+                # Since we use uniform length, this shouldn't happen, but handle it:
+                if len(matching) == 1 or (coord and len(self._hint_prefix) == len(matching[0])):
+                    _log(f"Exact match: '{self._hint_prefix}', coord={coord}")
+                    MouseControl.move_to(coord[0], coord[1])
+                    MouseControl.click('left')
+                    self._close_hints()
+                    return
 
-        # Filter visible hints to those starting with current prefix
+        # Filter visible hints
         self.visible_hints = [
             (x, y, label) for x, y, label in self.all_hints
             if label.startswith(self._hint_prefix)
@@ -127,11 +168,28 @@ class OverlayTool(Tool):
             self._close_hints()
             return
 
+        # If exactly one hint remains, auto-select it
+        if len(self.visible_hints) == 1:
+            x, y, label = self.visible_hints[0]
+            _log(f"Single remaining hint: '{label}', clicking")
+            MouseControl.move_to(x, y)
+            MouseControl.click('left')
+            self._close_hints()
+            return
+
         self.update()
 
     def _on_hint_timeout(self):
         _log("Hint mode timed out")
         self._close_hints()
+
+    def _on_grid_timeout(self):
+        _log("Grid mode timed out")
+        self.grid_visible = False
+        self._grid_timer.stop()
+        self._topmost_timer.stop()
+        self.update()
+        self.hide()
 
     def _close_hints(self):
         self._hint_active = False
@@ -139,6 +197,7 @@ class OverlayTool(Tool):
         self.all_hints = []
         self.visible_hints = []
         self._hint_timer.stop()
+        self._topmost_timer.stop()
         if self._hint_manager:
             self._hint_manager.clear()
         self.update()
@@ -167,15 +226,26 @@ class OverlayTool(Tool):
         if screen:
             self.setGeometry(screen.geometry())
         
-        self.grid_rect = rect  # stored in absolute screen coords
+        self.grid_rect = rect
         self.grid_visible = True
+        self._grid_timer.start()
+        self._topmost_timer.start()
         self.show()
         self.raise_()
+        self._enforce_topmost()
         self.update()
+
+    @Slot()
+    def reset_grid_timer(self):
+        """Reset the grid timeout (called each time a grid command is used)."""
+        if self.grid_visible:
+            self._grid_timer.start()
 
     @Slot()
     def hide_grid(self):
         self.grid_visible = False
+        self._grid_timer.stop()
+        self._topmost_timer.stop()
         self.hide()
 
     @Slot()
@@ -186,8 +256,10 @@ class OverlayTool(Tool):
         self._hint_prefix = ""
         self.visible_hints = list(self.all_hints)
         self._hint_timer.start()
+        self._topmost_timer.start()
         self.show()
         self.raise_()
+        self._enforce_topmost()
         self.update()
 
     @Slot()
@@ -218,7 +290,6 @@ class OverlayTool(Tool):
             self.grid_rect.height()
         )
 
-        # Draw crosshairs
         painter.drawLine(local_rect.left(), local_rect.center().y(),
                          local_rect.right(), local_rect.center().y())
         painter.drawLine(local_rect.center().x(), local_rect.top(),
@@ -231,7 +302,6 @@ class OverlayTool(Tool):
         geo = self.geometry()
 
         for x, y, label in self.visible_hints:
-            # Convert absolute screen coords to widget-local
             lx = x - geo.x()
             ly = y - geo.y()
 
@@ -247,28 +317,22 @@ class OverlayTool(Tool):
             prefix_len = len(self._hint_prefix)
 
             if prefix_len > 0 and label.startswith(self._hint_prefix):
-                # Draw already-typed prefix in yellow
                 prefix_part = label[:prefix_len]
                 remaining = label[prefix_len:]
                 
-                # Full text metrics for positioning
                 fm = painter.fontMetrics()
                 prefix_width = fm.horizontalAdvance(prefix_part)
                 total_width = fm.horizontalAdvance(label)
                 
-                # Center the full label text
                 text_x = text_rect.center().x() - total_width // 2
                 text_y = text_rect.center().y() + fm.ascent() // 2
                 
-                # Draw prefix in yellow
                 painter.setPen(QColor(255, 255, 0))
                 painter.drawText(text_x, text_y, prefix_part)
                 
-                # Draw remaining in white
                 painter.setPen(QColor(255, 255, 255))
                 painter.drawText(text_x + prefix_width, text_y, remaining)
             else:
-                # Draw full label in white
                 painter.setPen(QColor(255, 255, 255))
                 painter.drawText(text_rect, Qt.AlignCenter, label)
 

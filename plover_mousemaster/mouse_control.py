@@ -8,6 +8,10 @@ MOUSEEVENTF_RIGHTDOWN = 0x0008
 MOUSEEVENTF_RIGHTUP = 0x0010
 MOUSEEVENTF_MIDDLEDOWN = 0x0020
 MOUSEEVENTF_MIDDLEUP = 0x0040
+MOUSEEVENTF_WHEEL = 0x0800
+MOUSEEVENTF_HWHEEL = 0x01000
+
+WHEEL_DELTA = 120
 
 user32 = ctypes.windll.user32
 
@@ -60,3 +64,18 @@ class MouseControl:
     def nudge(dx, dy):
         x, y = MouseControl.get_position()
         MouseControl.move_to(x + dx, y + dy)
+
+    @staticmethod
+    def scroll(clicks=3, direction='up'):
+        """Scroll the mouse wheel.
+        
+        Args:
+            clicks: Number of scroll increments (default 3)
+            direction: 'up', 'down', 'left', or 'right'
+        """
+        if direction in ('up', 'down'):
+            delta = WHEEL_DELTA * clicks if direction == 'up' else -WHEEL_DELTA * clicks
+            user32.mouse_event(MOUSEEVENTF_WHEEL, 0, 0, ctypes.c_ulong(delta & 0xFFFFFFFF), 0)
+        elif direction in ('left', 'right'):
+            delta = WHEEL_DELTA * clicks if direction == 'right' else -WHEEL_DELTA * clicks
+            user32.mouse_event(MOUSEEVENTF_HWHEEL, 0, 0, ctypes.c_ulong(delta & 0xFFFFFFFF), 0)

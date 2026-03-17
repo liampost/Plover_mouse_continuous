@@ -9,39 +9,37 @@ import pywinauto
 
 class HintManager:
     """UI element discovery matching MouseMaster's approach:
-    - Only scan the FOREGROUND window (not all desktop windows)
+    - Scan the FOREGROUND window + the taskbar
     - Filter by interaction patterns (invokable, focusable, toggleable, etc.)
     - 40px dedup distance
     - Clip elements to their parent window bounds
+    - Single-letter labels when ≤26, double when >26
     """
     def __init__(self):
         self.current_hints = {}  # Maps label -> (x, y)
         self.letters = "abcdefghijklmnopqrstuvwxyz"
 
     def _generate_labels(self, count):
-        """Generate uniform-length labels to prevent collisions."""
+        """Single letters when ≤26 elements, uniform double letters when >26."""
         if count == 0:
             return []
         
-        labels = []
         if count <= 26:
-            # Two-letter labels: aa, ab, ac...
-            for i in range(count):
-                labels.append(self.letters[0] + self.letters[i])
+            # Single-letter labels: a, b, c...
+            return [self.letters[i] for i in range(count)]
         else:
             # Two-letter combos: aa, ab, ... az, ba, bb, ...
+            labels = []
             for i in range(min(count, 676)):
                 first = i // 26
                 second = i % 26
                 labels.append(self.letters[first] + self.letters[second])
-        
-        return labels
+            return labels
 
     def _get_foreground_window_handle(self):
-        """Get the handle of the foreground window, like MouseMaster does."""
+        """Get the handle of the foreground window."""
         user32 = ctypes.windll.user32
-        hwnd = user32.GetForegroundWindow()
-        return hwnd
+        return user32.GetForegroundWindow()
     
     def _get_window_rect(self, hwnd):
         """Get the bounding rect of a window."""
@@ -49,37 +47,11 @@ class HintManager:
         ctypes.windll.user32.GetWindowRect(hwnd, ctypes.byref(rect))
         return (rect.left, rect.top, rect.right, rect.bottom)
 
-    def scan_screen(self, screen_rect=None):
-        """Scan for clickable UI elements using MouseMaster's approach.
-        
-        Key differences from previous approach:
-        - Only scans the FOREGROUND window (active window)
-        - Uses pywinauto to check interaction patterns
-        - Filters: is_visible, is_enabled, and has an invocable/toggleable/focusable pattern
-        - 40px dedup distance (matching MouseMaster)
-        - Clips elements to window bounds
-        """
-        self.current_hints.clear()
-        
-        # Get the foreground window (like MouseMaster's GetForegroundWindow)
-        hwnd = self._get_foreground_window_handle()
-        if not hwnd:
-            return []
-        
-        try:
-            app = pywinauto.Application(backend="uia").connect(handle=hwnd)
-            win = app.window(handle=hwnd).wrapper_object()
-        except Exception:
-            return []
-        
-        win_rect = self._get_window_rect(hwnd)
+    def _scan_window(self, win, win_rect, screen_rect, elements):
+        """Scan a single window for interactive elements."""
         win_left, win_top, win_right, win_bottom = win_rect
         
-        clickable_elements = []
-        
         try:
-            # Get ALL descendants, then filter by interaction patterns
-            # This matches MouseMaster's approach of using pattern-based filtering
             all_controls = win.descendants()
             
             for control in all_controls:
@@ -87,10 +59,7 @@ class HintManager:
                     if not control.is_visible() or not control.is_enabled():
                         continue
                     
-                    # Check interaction patterns (matching MouseMaster's condition):
-                    # IsKeyboardFocusable OR IsInvokePatternAvailable OR 
-                    # ControlType=Button OR IsExpandCollapsePatternAvailable OR
-                    # IsTogglePatternAvailable OR IsSelectionItemPatternAvailable
+                    # Check interaction patterns (MouseMaster's filter)
                     is_interactive = False
                     
                     try:
@@ -104,7 +73,6 @@ class HintManager:
                     
                     if not is_interactive:
                         try:
-                            # Check if keyboard focusable
                             if control.is_keyboard_focusable():
                                 is_interactive = True
                         except:
@@ -112,36 +80,28 @@ class HintManager:
                     
                     if not is_interactive:
                         try:
-                            # Check for invoke pattern
-                            iface = control.iface_invoke
-                            if iface is not None:
+                            if control.iface_invoke is not None:
                                 is_interactive = True
                         except:
                             pass
                     
                     if not is_interactive:
                         try:
-                            # Check for toggle pattern
-                            iface = control.iface_toggle
-                            if iface is not None:
+                            if control.iface_toggle is not None:
                                 is_interactive = True
                         except:
                             pass
                     
                     if not is_interactive:
                         try:
-                            # Check for expand/collapse pattern
-                            iface = control.iface_expand_collapse
-                            if iface is not None:
+                            if control.iface_expand_collapse is not None:
                                 is_interactive = True
                         except:
                             pass
                     
                     if not is_interactive:
                         try:
-                            # Check for selection item pattern
-                            iface = control.iface_selection_item
-                            if iface is not None:
+                            if control.iface_selection_item is not None:
                                 is_interactive = True
                         except:
                             pass
@@ -159,23 +119,63 @@ class HintManager:
                     x = rect.left + w // 2
                     y = rect.top + h // 2
                     
-                    # Clip to parent window bounds (like MouseMaster)
+                    # Clip to parent window bounds
                     if x < win_left or x > win_right or y < win_top or y > win_bottom:
                         continue
                     
-                    # Also clip to active screen if specified
+                    # Clip to active screen if specified
                     if screen_rect is not None:
                         sl, st, sr, sb = screen_rect
                         if x < sl or x > sr or y < st or y > sb:
                             continue
                     
-                    clickable_elements.append((x, y))
+                    elements.append((x, y))
                 except:
                     pass
         except:
             pass
 
-        # De-duplicate with 40px distance (matching MouseMaster's MIN_DISTANCE_BETWEEN_HINTS)
+    def scan_screen(self, screen_rect=None):
+        """Scan for clickable UI elements."""
+        self.current_hints.clear()
+        clickable_elements = []
+        
+        # 1. Scan the foreground window
+        hwnd = self._get_foreground_window_handle()
+        if hwnd:
+            try:
+                app = pywinauto.Application(backend="uia").connect(handle=hwnd)
+                win = app.window(handle=hwnd).wrapper_object()
+                win_rect = self._get_window_rect(hwnd)
+                self._scan_window(win, win_rect, screen_rect, clickable_elements)
+            except:
+                pass
+        
+        # 2. Also scan the taskbar
+        try:
+            desktop = pywinauto.Desktop(backend="uia")
+            taskbar_windows = desktop.windows(class_name="Shell_TrayWnd")
+            for taskbar in taskbar_windows:
+                try:
+                    tb_rect = taskbar.rectangle()
+                    tb_bounds = (tb_rect.left, tb_rect.top, tb_rect.right, tb_rect.bottom)
+                    self._scan_window(taskbar, tb_bounds, screen_rect, clickable_elements)
+                except:
+                    pass
+            
+            # Also scan secondary taskbars on other monitors
+            secondary_taskbars = desktop.windows(class_name="Shell_SecondaryTrayWnd")
+            for taskbar in secondary_taskbars:
+                try:
+                    tb_rect = taskbar.rectangle()
+                    tb_bounds = (tb_rect.left, tb_rect.top, tb_rect.right, tb_rect.bottom)
+                    self._scan_window(taskbar, tb_bounds, screen_rect, clickable_elements)
+                except:
+                    pass
+        except:
+            pass
+
+        # De-duplicate with 40px distance
         unique_elements = []
         for ex, ey in clickable_elements:
             is_duplicate = False
@@ -188,7 +188,7 @@ class HintManager:
             if not is_duplicate:
                 unique_elements.append((ex, ey))
 
-        # Generate uniform-length labels
+        # Generate labels (single if ≤26 elements, double if >26)
         labels = self._generate_labels(len(unique_elements))
         
         hints_for_overlay = []

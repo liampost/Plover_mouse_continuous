@@ -28,7 +28,7 @@ _is_dragging = False
 _hint_manager = HintManager()
 
 def _get_overlay():
-    """Get the overlay tool instance (created by Plover's GUI system on the main thread)."""
+    """Get the overlay tool instance."""
     from .overlay_tool import get_overlay
     overlay = get_overlay()
     if overlay is None:
@@ -43,7 +43,6 @@ def _get_active_screen_rect():
         screen = app.screenAt(cursor_pos)
         if screen:
             return screen.geometry()
-    # Fallback to primary
     if app:
         screen = app.primaryScreen()
         if screen:
@@ -102,14 +101,35 @@ def mn_right_click(engine: StenoEngine, args: str):
     mn_click(engine, 'right')
 
 def mn_move(engine: StenoEngine, args: str):
+    """Move mouse by dx,dy pixels. Usage: {plover:mm_move:10,0}"""
     try:
         dx, dy = map(int, args.split(','))
         MouseControl.nudge(dx, dy)
     except:
         pass
 
+def mn_scroll(engine: StenoEngine, args: str):
+    """Scroll the mouse wheel. Usage: {plover:mm_scroll:up}, {plover:mm_scroll:down:5}
+    
+    Args format: direction or direction:clicks
+    Directions: up, down, left, right
+    Default clicks: 3
+    """
+    parts = args.split(':') if ':' in args else args.split(',')
+    direction = parts[0].strip().lower() if parts else 'down'
+    clicks = 3
+    if len(parts) > 1:
+        try:
+            clicks = int(parts[1].strip())
+        except:
+            pass
+    
+    if direction in ('up', 'down', 'left', 'right'):
+        MouseControl.scroll(clicks=clicks, direction=direction)
+        _log(f"Scrolled {direction} by {clicks}")
+
 def mn_screen(engine: StenoEngine, args: str):
-    """Cycle through available screens and move the cursor to the next one's center."""
+    """Cycle through available screens and move cursor to center."""
     app = QApplication.instance()
     if not app:
         return
@@ -121,14 +141,12 @@ def mn_screen(engine: StenoEngine, args: str):
     cursor_pos = QCursor.pos()
     current_screen = app.screenAt(cursor_pos)
     
-    # Find the index of the current screen
     current_idx = 0
     for i, screen in enumerate(screens):
         if screen == current_screen:
             current_idx = i
             break
     
-    # Move to the next screen (wrapping around)
     next_idx = (current_idx + 1) % len(screens)
     next_screen = screens[next_idx]
     next_center = next_screen.geometry().center()
@@ -137,23 +155,20 @@ def mn_screen(engine: StenoEngine, args: str):
     MouseControl.move_to(next_center.x(), next_center.y())
 
 def mn_hint(engine: StenoEngine, args: str):
-    """Start or close hint mode. Letter input is captured via the engine hook in OverlayTool."""
+    """Start or close hint mode."""
     overlay = _get_overlay()
     if overlay is None:
         return
     
     if args == "start":
-        # Get active screen bounds for filtering
         screen_rect = _get_active_screen_rect()
         screen_bounds = (screen_rect.left(), screen_rect.top(), 
                          screen_rect.right(), screen_rect.bottom())
         
-        # Scan screen for clickable elements (filtered to active monitor)
         hints = _hint_manager.scan_screen(screen_rect=screen_bounds)
         _log(f"mn_hint start: {len(hints)} hints found on active screen")
         
         if hints:
-            # Store the hint manager reference on the overlay for coordinate lookup
             overlay._hint_manager = _hint_manager
             overlay.all_hints = hints
             QMetaObject.invokeMethod(overlay, "activate_hints", Qt.QueuedConnection)
