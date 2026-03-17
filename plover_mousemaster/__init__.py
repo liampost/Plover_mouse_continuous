@@ -4,36 +4,55 @@ except ImportError:
     StenoEngine = None
 
 from PyQt5.QtWidgets import QApplication
-from PyQt5.QtCore import QRect
+from PyQt5.QtCore import QRect, QObject, pyqtSignal, pyqtSlot, Qt
 from PyQt5 import sip
-from .overlay import OverlayWindow
 from .mouse_control import MouseControl
 import sys
 
 # Singleton-like state management
-_overlay = None
 _current_rect = None
 _is_dragging = False
 
-def get_overlay():
-    global _overlay
-    if _overlay is None or sip.isdeleted(_overlay):
-        app = QApplication.instance()
-        if app is None:
-            app = QApplication(sys.argv)
-        _overlay = OverlayWindow()
-    return _overlay
+class OverlayController(QObject):
+    show_grid_signal = pyqtSignal(QRect)
+    hide_grid_signal = pyqtSignal()
+
+    def __init__(self):
+        super().__init__()
+        self.overlay = None
+        self.show_grid_signal.connect(self.do_show_grid, Qt.QueuedConnection)
+        self.hide_grid_signal.connect(self.do_hide_grid, Qt.QueuedConnection)
+
+    @pyqtSlot(QRect)
+    def do_show_grid(self, rect):
+        from .overlay import OverlayWindow
+        if self.overlay is None or sip.isdeleted(self.overlay):
+            self.overlay = OverlayWindow()
+        self.overlay.show_grid(rect)
+
+    @pyqtSlot()
+    def do_hide_grid(self):
+        if self.overlay and not sip.isdeleted(self.overlay):
+            self.overlay.hide_grid()
+
+# Initialize controller at module level (loads on main thread during Plover startup)
+_controller = None
+
+def _get_controller():
+    global _controller
+    if _controller is None:
+        _controller = OverlayController()
+    return _controller
 
 def mm_init(engine: StenoEngine, args: str):
-    # For the native plugin, init just ensures the overlay is ready.
-    # It doesn't need to launch an external .exe anymore!
-    get_overlay()
+    _get_controller()
 
 def mn_grid(engine: StenoEngine, args: str):
     global _current_rect
-    overlay = get_overlay()
+    controller = _get_controller()
     
-    screen = QApplication.primaryScreen()
+    app = QApplication.instance()
+    screen = app.primaryScreen() if app else None
     if screen:
         screen_rect = screen.geometry()
     else:
@@ -41,7 +60,7 @@ def mn_grid(engine: StenoEngine, args: str):
     
     if _current_rect is None or args == "reset":
         _current_rect = QRect(screen_rect)
-        overlay.show_grid(_current_rect)
+        controller.show_grid_signal.emit(_current_rect)
         return
 
     if args == "up":
@@ -53,11 +72,11 @@ def mn_grid(engine: StenoEngine, args: str):
     elif args == "right":
         _current_rect.setLeft(_current_rect.left() + _current_rect.width() // 2)
     elif args == "close":
-        overlay.hide_grid()
+        controller.hide_grid_signal.emit()
         _current_rect = None
         return
 
-    overlay.show_grid(_current_rect)
+    controller.show_grid_signal.emit(_current_rect)
     MouseControl.move_to(_current_rect.center().x(), _current_rect.center().y())
 
 def mn_click(engine: StenoEngine, args: str):
@@ -66,7 +85,7 @@ def mn_click(engine: StenoEngine, args: str):
     MouseControl.click(button)
     
     if _current_rect is not None:
-        get_overlay().hide_grid()
+        _get_controller().hide_grid_signal.emit()
         _current_rect = None
 
 def mn_right_click(engine: StenoEngine, args: str):
@@ -80,7 +99,6 @@ def mn_move(engine: StenoEngine, args: str):
         pass
 
 def mn_hint(engine: StenoEngine, args: str):
-    # Hint mode logic to be implemented
     pass
 
 def mn_toggle_drag(engine: StenoEngine, args: str):
@@ -91,3 +109,4 @@ def mn_toggle_drag(engine: StenoEngine, args: str):
     else:
         MouseControl.press('left')
         _is_dragging = True
+
