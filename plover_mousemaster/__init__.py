@@ -7,21 +7,28 @@ from PyQt5.QtWidgets import QApplication
 from PyQt5.QtCore import QRect, QObject, pyqtSignal, pyqtSlot, Qt
 from PyQt5 import sip
 from .mouse_control import MouseControl
+from .hints import HintManager
 import sys
 
 # Singleton-like state management
 _current_rect = None
 _is_dragging = False
+_hint_manager = HintManager()
+_hint_labels = ""
 
 class OverlayController(QObject):
     show_grid_signal = pyqtSignal(QRect)
     hide_grid_signal = pyqtSignal()
+    show_hints_signal = pyqtSignal(list)
+    hide_hints_signal = pyqtSignal()
 
     def __init__(self):
         super().__init__()
         self.overlay = None
         self.show_grid_signal.connect(self.do_show_grid, Qt.QueuedConnection)
         self.hide_grid_signal.connect(self.do_hide_grid, Qt.QueuedConnection)
+        self.show_hints_signal.connect(self.do_show_hints, Qt.QueuedConnection)
+        self.hide_hints_signal.connect(self.do_hide_hints, Qt.QueuedConnection)
 
     @pyqtSlot(QRect)
     def do_show_grid(self, rect):
@@ -34,6 +41,20 @@ class OverlayController(QObject):
     def do_hide_grid(self):
         if self.overlay and not sip.isdeleted(self.overlay):
             self.overlay.hide_grid()
+
+    @pyqtSlot(list)
+    def do_show_hints(self, hints):
+        from .overlay import OverlayWindow
+        if self.overlay is None or sip.isdeleted(self.overlay):
+            self.overlay = OverlayWindow()
+        self.overlay.set_hints(hints)
+
+    @pyqtSlot()
+    def do_hide_hints(self):
+        if self.overlay and not sip.isdeleted(self.overlay):
+            self.overlay.hints = []
+            self.overlay.update()
+            self.overlay.hide()
 
 # Initialize controller at module level (loads on main thread during Plover startup)
 _controller = None
@@ -99,7 +120,35 @@ def mn_move(engine: StenoEngine, args: str):
         pass
 
 def mn_hint(engine: StenoEngine, args: str):
-    pass
+    global _hint_labels
+    controller = _get_controller()
+    
+    if args == "start":
+        # Scan screen and show hints
+        hints = _hint_manager.scan_screen()
+        _hint_labels = ""
+        if hints:
+            controller.show_hints_signal.emit(hints)
+        return
+        
+    if args == "close":
+        controller.hide_hints_signal.emit()
+        _hint_manager.clear()
+        _hint_labels = ""
+        return
+        
+    # Otherwise, args is a letter being typed
+    if args.isalpha():
+        _hint_labels = _hint_labels + args.upper()
+        coord = _hint_manager.get_coordinate(_hint_labels)
+        if coord:
+            # We found a match! Move and click
+            MouseControl.move_to(coord[0], coord[1])
+            MouseControl.click('left')
+            # Hide hints automatically
+            controller.hide_hints_signal.emit()
+            _hint_manager.clear()
+            _hint_labels = ""
 
 def mn_toggle_drag(engine: StenoEngine, args: str):
     global _is_dragging

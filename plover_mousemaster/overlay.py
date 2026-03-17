@@ -10,10 +10,12 @@ class OverlayWindow(QMainWindow):
             Qt.WindowStaysOnTopHint |
             Qt.FramelessWindowHint |
             Qt.Tool |
-            Qt.WindowTransparentForInput
+            Qt.WindowTransparentForInput |
+            Qt.WindowDoesNotAcceptFocus
         )
         self.setAttribute(Qt.WA_TranslucentBackground)
         self.setAttribute(Qt.WA_NoSystemBackground)
+        self.setAttribute(Qt.WA_ShowWithoutActivating)
         
         self.grid_visible = False
         self.grid_rect = QRect()
@@ -31,6 +33,8 @@ class OverlayWindow(QMainWindow):
         self.grid_rect = rect
         self.grid_visible = True
         self.show()
+        self.raise_()
+        self.activateWindow()
         self.update()
 
     def hide_grid(self):
