@@ -1,40 +1,88 @@
-import subprocess
-import os
-import ctypes
-from plover.engine import StenoEngine
+try:
+    from plover.engine import StenoEngine
+except ImportError:
+    StenoEngine = None
 
-MOUSEMASTER_LAUNCHER = r"C:\Users\postw\OneDrive\Documents\Coding\MISC\Plover_plugins\mousemaster_launcher.vbs"
+from PyQt5.QtWidgets import QApplication
+from PyQt5.QtCore import QRect
+from .overlay import OverlayWindow
+from .mouse_control import MouseControl
+import sys
+
+# Singleton-like state management
+_overlay = None
+_current_rect = None
+_is_dragging = False
+
+def get_overlay():
+    global _overlay
+    if _overlay is None:
+        app = QApplication.instance()
+        if app is None:
+            app = QApplication(sys.argv)
+        _overlay = OverlayWindow()
+    return _overlay
 
 def mm_init(engine: StenoEngine, args: str):
-    if os.path.exists(MOUSEMASTER_LAUNCHER):
-        try:
-            cwd = os.path.dirname(MOUSEMASTER_LAUNCHER)
-            original_cwd = os.getcwd()
-            os.chdir(cwd)
-            os.startfile(MOUSEMASTER_LAUNCHER)
-            os.chdir(original_cwd)
-        except Exception as e:
-            print(f"Failed to start MouseMaster Launcher: {e}")
+    # For the native plugin, init just ensures the overlay is ready.
+    # It doesn't need to launch an external .exe anymore!
+    get_overlay()
 
-import time
+def mn_grid(engine: StenoEngine, args: str):
+    global _current_rect
+    overlay = get_overlay()
+    
+    screen_rect = QApplication.primaryScreen().geometry()
+    
+    if _current_rect is None or args == "reset":
+        _current_rect = QRect(screen_rect)
+        overlay.show_grid(_current_rect)
+        return
 
-def _send_vk(vk_code):
-    scan_code = ctypes.windll.user32.MapVirtualKeyA(vk_code, 0)
-    # key down
-    ctypes.windll.user32.keybd_event(vk_code, scan_code, 0, 0)
-    time.sleep(0.01)
-    # key up
-    ctypes.windll.user32.keybd_event(vk_code, scan_code, 2, 0)
+    if args == "up":
+        _current_rect.setHeight(_current_rect.height() // 2)
+    elif args == "down":
+        _current_rect.setTop(_current_rect.top() + _current_rect.height() // 2)
+    elif args == "left":
+        _current_rect.setWidth(_current_rect.width() // 2)
+    elif args == "right":
+        _current_rect.setLeft(_current_rect.left() + _current_rect.width() // 2)
+    elif args == "close":
+        overlay.hide_grid()
+        _current_rect = None
+        return
 
-# F13 = 0x7C, F14 = 0x7D, F15 = 0x7E, F16 = 0x7F, F17 = 0x80, F18 = 0x81, F19 = 0x82, F20 = 0x83, F21 = 0x84, F22 = 0x85, F23 = 0x86
-def mm_normal(engine: StenoEngine, args: str): _send_vk(0x7C)
-def mm_hint(engine: StenoEngine, args: str): _send_vk(0x7D)
-def mm_grid(engine: StenoEngine, args: str): _send_vk(0x7E)
-def mm_screen(engine: StenoEngine, args: str): _send_vk(0x7F)
-def mm_left_click(engine: StenoEngine, args: str): _send_vk(0x80)
-def mm_right_click(engine: StenoEngine, args: str): _send_vk(0x81)
-def mm_toggle_click(engine: StenoEngine, args: str): _send_vk(0x82)
-def mm_nav_back(engine: StenoEngine, args: str): _send_vk(0x83)
-def mm_nav_forward(engine: StenoEngine, args: str): _send_vk(0x84)
-def mm_click_disable(engine: StenoEngine, args: str): _send_vk(0x85)
-def mm_disable(engine: StenoEngine, args: str): _send_vk(0x86)
+    overlay.show_grid(_current_rect)
+    MouseControl.move_to(_current_rect.center().x(), _current_rect.center().y())
+
+def mn_click(engine: StenoEngine, args: str):
+    global _current_rect
+    button = args if args else 'left'
+    MouseControl.click(button)
+    
+    if _current_rect is not None:
+        get_overlay().hide_grid()
+        _current_rect = None
+
+def mn_right_click(engine: StenoEngine, args: str):
+    mn_click(engine, 'right')
+
+def mn_move(engine: StenoEngine, args: str):
+    try:
+        dx, dy = map(int, args.split(','))
+        MouseControl.nudge(dx, dy)
+    except:
+        pass
+
+def mn_hint(engine: StenoEngine, args: str):
+    # Hint mode logic to be implemented
+    pass
+
+def mn_toggle_drag(engine: StenoEngine, args: str):
+    global _is_dragging
+    if _is_dragging:
+        MouseControl.release('left')
+        _is_dragging = False
+    else:
+        MouseControl.press('left')
+        _is_dragging = True
