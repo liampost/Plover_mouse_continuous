@@ -1,48 +1,35 @@
 import sys
 import math
+import ctypes
+import ctypes.wintypes
 
-# Fix COM threading issues with PySide6
+# Fix COM threading issues
 sys.coinit_flags = 2
 import pywinauto
-from pywinauto.findwindows import find_windows
-from pywinauto.application import Application
 
 class HintManager:
+    """UI element discovery matching MouseMaster's approach:
+    - Only scan the FOREGROUND window (not all desktop windows)
+    - Filter by interaction patterns (invokable, focusable, toggleable, etc.)
+    - 40px dedup distance
+    - Clip elements to their parent window bounds
+    """
     def __init__(self):
-        self.current_hints = {} # Maps label -> (x, y)
+        self.current_hints = {}  # Maps label -> (x, y)
         self.letters = "abcdefghijklmnopqrstuvwxyz"
 
     def _generate_labels(self, count):
-        """Generate uniform-length labels for all hints.
-        
-        All labels will have the same length to prevent collisions
-        (e.g. 'a' matching before 'ag').
-        
-        For <= 26 elements: aa, ab, ac... az
-        For <= 676 elements: aa, ab, ac... zz
-        """
+        """Generate uniform-length labels to prevent collisions."""
         if count == 0:
             return []
         
         labels = []
-        
         if count <= 26:
-            # Use two-letter labels: aa, ab, ac... for uniform length
+            # Two-letter labels: aa, ab, ac...
             for i in range(count):
-                labels.append(self.letters[i] + self.letters[i])
-            # Actually, that's weird (aa, bb, cc). Let's use: 
-            # a + a, a + b, a + c ... so it's clearer
-            labels = []
-            for i in range(count):
-                first = i // 26
-                second = i % 26
-                if count <= 26:
-                    # For small sets, use single first letter + varied second
-                    labels.append(self.letters[0] + self.letters[i])
-                else:
-                    labels.append(self.letters[first] + self.letters[second])
+                labels.append(self.letters[0] + self.letters[i])
         else:
-            # Two-letter combos: aa, ab, ac, ..., az, ba, bb, ...
+            # Two-letter combos: aa, ab, ... az, ba, bb, ...
             for i in range(min(count, 676)):
                 first = i // 26
                 second = i % 26
@@ -50,92 +37,152 @@ class HintManager:
         
         return labels
 
+    def _get_foreground_window_handle(self):
+        """Get the handle of the foreground window, like MouseMaster does."""
+        user32 = ctypes.windll.user32
+        hwnd = user32.GetForegroundWindow()
+        return hwnd
+    
+    def _get_window_rect(self, hwnd):
+        """Get the bounding rect of a window."""
+        rect = ctypes.wintypes.RECT()
+        ctypes.windll.user32.GetWindowRect(hwnd, ctypes.byref(rect))
+        return (rect.left, rect.top, rect.right, rect.bottom)
+
     def scan_screen(self, screen_rect=None):
-        """Scan for clickable UI elements.
+        """Scan for clickable UI elements using MouseMaster's approach.
         
-        Args:
-            screen_rect: Optional tuple (left, top, right, bottom) to filter 
-                         elements to a specific monitor's bounds.
+        Key differences from previous approach:
+        - Only scans the FOREGROUND window (active window)
+        - Uses pywinauto to check interaction patterns
+        - Filters: is_visible, is_enabled, and has an invocable/toggleable/focusable pattern
+        - 40px dedup distance (matching MouseMaster)
+        - Clips elements to window bounds
         """
         self.current_hints.clear()
         
-        # Connect to Desktop to see all windows
-        desktop = pywinauto.Desktop(backend="uia")
+        # Get the foreground window (like MouseMaster's GetForegroundWindow)
+        hwnd = self._get_foreground_window_handle()
+        if not hwnd:
+            return []
         
-        # Getting all visible top-level windows
-        windows = desktop.windows(visible_only=True)
+        try:
+            app = pywinauto.Application(backend="uia").connect(handle=hwnd)
+            win = app.window(handle=hwnd).wrapper_object()
+        except Exception:
+            return []
+        
+        win_rect = self._get_window_rect(hwnd)
+        win_left, win_top, win_right, win_bottom = win_rect
         
         clickable_elements = []
         
-        for win in windows:
-            # Skip irrelevant windows
-            title = win.window_text()
-            if not title or title in ["Mouse Overlay", "OverlayWindow", "Program Manager"]:
-                continue
+        try:
+            # Get ALL descendants, then filter by interaction patterns
+            # This matches MouseMaster's approach of using pattern-based filtering
+            all_controls = win.descendants()
             
-            # Skip windows that are too small to be real
-            try:
-                win_rect = win.rectangle()
-                if win_rect.width() < 10 or win_rect.height() < 10:
-                    continue
-            except:
-                continue
-                
-            try:
-                # Use a targeted search for interactive control types
-                controls = win.descendants(control_type="Button") + \
-                           win.descendants(control_type="MenuItem") + \
-                           win.descendants(control_type="Hyperlink") + \
-                           win.descendants(control_type="TabItem")
-                
-                for control in controls:
+            for control in all_controls:
+                try:
+                    if not control.is_visible() or not control.is_enabled():
+                        continue
+                    
+                    # Check interaction patterns (matching MouseMaster's condition):
+                    # IsKeyboardFocusable OR IsInvokePatternAvailable OR 
+                    # ControlType=Button OR IsExpandCollapsePatternAvailable OR
+                    # IsTogglePatternAvailable OR IsSelectionItemPatternAvailable
+                    is_interactive = False
+                    
                     try:
-                        if not control.is_visible() or not control.is_enabled():
-                            continue
-                        
-                        rect = control.rectangle()
-                        w = rect.width()
-                        h = rect.height()
-                        
-                        # Filter out too-small or too-large elements
-                        if w < 5 or h < 5:
-                            continue
-                        if w > 800 or h > 400:
-                            continue
-                        
-                        x = rect.left + w // 2
-                        y = rect.top + h // 2
-                        
-                        # Filter to active screen bounds if specified
-                        if screen_rect is not None:
-                            sl, st, sr, sb = screen_rect
-                            if x < sl or x > sr or y < st or y > sb:
-                                continue
-                        
-                        # Check that the element has a name or automation ID
-                        # (elements without names are often invisible decorators)
-                        name = control.window_text()
-                        auto_id = ""
-                        try:
-                            auto_id = control.automation_id()
-                        except:
-                            pass
-                        
-                        if not name and not auto_id:
-                            continue
-                        
-                        clickable_elements.append((x, y))
+                        ctrl_type = control.element_info.control_type
+                        if ctrl_type in ("Button", "MenuItem", "Hyperlink", 
+                                         "TabItem", "CheckBox", "RadioButton",
+                                         "ComboBox", "SplitButton"):
+                            is_interactive = True
                     except:
                         pass
-            except:
-                pass
+                    
+                    if not is_interactive:
+                        try:
+                            # Check if keyboard focusable
+                            if control.is_keyboard_focusable():
+                                is_interactive = True
+                        except:
+                            pass
+                    
+                    if not is_interactive:
+                        try:
+                            # Check for invoke pattern
+                            iface = control.iface_invoke
+                            if iface is not None:
+                                is_interactive = True
+                        except:
+                            pass
+                    
+                    if not is_interactive:
+                        try:
+                            # Check for toggle pattern
+                            iface = control.iface_toggle
+                            if iface is not None:
+                                is_interactive = True
+                        except:
+                            pass
+                    
+                    if not is_interactive:
+                        try:
+                            # Check for expand/collapse pattern
+                            iface = control.iface_expand_collapse
+                            if iface is not None:
+                                is_interactive = True
+                        except:
+                            pass
+                    
+                    if not is_interactive:
+                        try:
+                            # Check for selection item pattern
+                            iface = control.iface_selection_item
+                            if iface is not None:
+                                is_interactive = True
+                        except:
+                            pass
+                    
+                    if not is_interactive:
+                        continue
+                    
+                    rect = control.rectangle()
+                    w = rect.width()
+                    h = rect.height()
+                    
+                    if w <= 0 or h <= 0:
+                        continue
+                    
+                    x = rect.left + w // 2
+                    y = rect.top + h // 2
+                    
+                    # Clip to parent window bounds (like MouseMaster)
+                    if x < win_left or x > win_right or y < win_top or y > win_bottom:
+                        continue
+                    
+                    # Also clip to active screen if specified
+                    if screen_rect is not None:
+                        sl, st, sr, sb = screen_rect
+                        if x < sl or x > sr or y < st or y > sb:
+                            continue
+                    
+                    clickable_elements.append((x, y))
+                except:
+                    pass
+        except:
+            pass
 
-        # De-duplicate elements that are extremely close to each other
+        # De-duplicate with 40px distance (matching MouseMaster's MIN_DISTANCE_BETWEEN_HINTS)
         unique_elements = []
         for ex, ey in clickable_elements:
             is_duplicate = False
             for ux, uy in unique_elements:
-                if math.hypot(ex - ux, ey - uy) < 20:
+                dx = ex - ux
+                dy = ey - uy
+                if dx * dx + dy * dy < 40 * 40:
                     is_duplicate = True
                     break
             if not is_duplicate:
