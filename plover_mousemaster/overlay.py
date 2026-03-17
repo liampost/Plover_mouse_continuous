@@ -21,7 +21,11 @@ class OverlayWindow(QMainWindow):
         
         # Geometry will be set to full screen
         screen = QApplication.primaryScreen()
-        self.setGeometry(screen.geometry())
+        if screen:
+            self.setGeometry(screen.geometry())
+        else:
+            # Fallback if screen detection fails
+            self.setGeometry(0, 0, 1920, 1080)
 
     def show_grid(self, rect):
         self.grid_rect = rect

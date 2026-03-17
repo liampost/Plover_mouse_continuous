@@ -32,7 +32,11 @@ def mn_grid(engine: StenoEngine, args: str):
     global _current_rect
     overlay = get_overlay()
     
-    screen_rect = QApplication.primaryScreen().geometry()
+    screen = QApplication.primaryScreen()
+    if screen:
+        screen_rect = screen.geometry()
+    else:
+        screen_rect = QRect(0, 0, 1920, 1080)
     
     if _current_rect is None or args == "reset":
         _current_rect = QRect(screen_rect)
