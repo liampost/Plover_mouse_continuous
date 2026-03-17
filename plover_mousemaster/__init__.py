@@ -63,6 +63,9 @@ def _get_controller():
     global _controller
     if _controller is None:
         _controller = OverlayController()
+        app = QApplication.instance()
+        if app is not None:
+            _controller.moveToThread(app.thread())
     return _controller
 
 def mm_init(engine: StenoEngine, args: str):
