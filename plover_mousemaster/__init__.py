@@ -5,6 +5,7 @@ except ImportError:
 
 from PySide6.QtWidgets import QApplication
 from PySide6.QtCore import QRect, QMetaObject, Qt, Q_ARG
+from PySide6.QtGui import QCursor
 from .mouse_control import MouseControl
 from .hints import HintManager
 import os
@@ -25,7 +26,6 @@ def _log(msg):
 _current_rect = None
 _is_dragging = False
 _hint_manager = HintManager()
-_hint_labels = ""
 
 def _get_overlay():
     """Get the overlay tool instance (created by Plover's GUI system on the main thread)."""
@@ -34,6 +34,21 @@ def _get_overlay():
     if overlay is None:
         _log("WARNING: Overlay tool not yet created. Open it from Tools menu first.")
     return overlay
+
+def _get_active_screen_rect():
+    """Get the geometry of the screen where the mouse cursor currently is."""
+    cursor_pos = QCursor.pos()
+    app = QApplication.instance()
+    if app:
+        screen = app.screenAt(cursor_pos)
+        if screen:
+            return screen.geometry()
+    # Fallback to primary
+    if app:
+        screen = app.primaryScreen()
+        if screen:
+            return screen.geometry()
+    return QRect(0, 0, 1920, 1080)
 
 def mm_init(engine: StenoEngine, args: str):
     _log("mm_init called")
@@ -44,15 +59,10 @@ def mn_grid(engine: StenoEngine, args: str):
     
     overlay = _get_overlay()
     if overlay is None:
-        _log("ERROR: overlay is None, can't show grid")
         return
 
-    app = QApplication.instance()
-    screen = app.primaryScreen() if app else None
-    if screen:
-        screen_rect = screen.geometry()
-    else:
-        screen_rect = QRect(0, 0, 1920, 1080)
+    # Use the screen where cursor currently is
+    screen_rect = _get_active_screen_rect()
     
     if _current_rect is None or args == "reset":
         _current_rect = QRect(screen_rect)
@@ -98,43 +108,61 @@ def mn_move(engine: StenoEngine, args: str):
     except:
         pass
 
-def mn_hint(engine: StenoEngine, args: str):
-    global _hint_labels
+def mn_screen(engine: StenoEngine, args: str):
+    """Cycle through available screens and move the cursor to the next one's center."""
+    app = QApplication.instance()
+    if not app:
+        return
     
+    screens = app.screens()
+    if len(screens) <= 1:
+        return
+    
+    cursor_pos = QCursor.pos()
+    current_screen = app.screenAt(cursor_pos)
+    
+    # Find the index of the current screen
+    current_idx = 0
+    for i, screen in enumerate(screens):
+        if screen == current_screen:
+            current_idx = i
+            break
+    
+    # Move to the next screen (wrapping around)
+    next_idx = (current_idx + 1) % len(screens)
+    next_screen = screens[next_idx]
+    next_center = next_screen.geometry().center()
+    
+    _log(f"Switching from screen {current_idx} to {next_idx}: center={next_center}")
+    MouseControl.move_to(next_center.x(), next_center.y())
+
+def mn_hint(engine: StenoEngine, args: str):
+    """Start or close hint mode. Letter input is captured via the engine hook in OverlayTool."""
     overlay = _get_overlay()
     if overlay is None:
         return
     
     if args == "start":
-        hints = _hint_manager.scan_screen()
-        _hint_labels = ""
-        _log(f"mn_hint start: {len(hints)} hints found")
+        # Get active screen bounds for filtering
+        screen_rect = _get_active_screen_rect()
+        screen_bounds = (screen_rect.left(), screen_rect.top(), 
+                         screen_rect.right(), screen_rect.bottom())
+        
+        # Scan screen for clickable elements (filtered to active monitor)
+        hints = _hint_manager.scan_screen(screen_rect=screen_bounds)
+        _log(f"mn_hint start: {len(hints)} hints found on active screen")
+        
         if hints:
-            overlay.hints = hints
-            QMetaObject.invokeMethod(overlay, "show", Qt.QueuedConnection)
-            QMetaObject.invokeMethod(overlay, "raise_", Qt.QueuedConnection)
-            QMetaObject.invokeMethod(overlay, "update", Qt.QueuedConnection)
+            # Store the hint manager reference on the overlay for coordinate lookup
+            overlay._hint_manager = _hint_manager
+            overlay.all_hints = hints
+            QMetaObject.invokeMethod(overlay, "activate_hints", Qt.QueuedConnection)
         return
         
     if args == "close":
-        overlay.hints = []
-        QMetaObject.invokeMethod(overlay, "update", Qt.QueuedConnection)
-        QMetaObject.invokeMethod(overlay, "hide", Qt.QueuedConnection)
+        QMetaObject.invokeMethod(overlay, "deactivate_hints", Qt.QueuedConnection)
         _hint_manager.clear()
-        _hint_labels = ""
         return
-        
-    if args.isalpha():
-        _hint_labels = _hint_labels + args.upper()
-        coord = _hint_manager.get_coordinate(_hint_labels)
-        if coord:
-            MouseControl.move_to(coord[0], coord[1])
-            MouseControl.click('left')
-            overlay.hints = []
-            QMetaObject.invokeMethod(overlay, "update", Qt.QueuedConnection)
-            QMetaObject.invokeMethod(overlay, "hide", Qt.QueuedConnection)
-            _hint_manager.clear()
-            _hint_labels = ""
 
 def mn_toggle_drag(engine: StenoEngine, args: str):
     global _is_dragging

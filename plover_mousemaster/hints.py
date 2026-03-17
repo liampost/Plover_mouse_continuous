@@ -1,7 +1,7 @@
 import sys
 import math
 
-# Fix COM threading issues with PyQt5
+# Fix COM threading issues with PySide6
 sys.coinit_flags = 2
 import pywinauto
 from pywinauto.findwindows import find_windows
@@ -10,10 +10,10 @@ from pywinauto.application import Application
 class HintManager:
     def __init__(self):
         self.current_hints = {} # Maps label -> (x, y)
-        self.letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        self.letters = "abcdefghijklmnopqrstuvwxyz"
 
     def _generate_label(self, index, total):
-        # Generates sequence A, B, C... AA, AB, AC...
+        # Generates sequence a, b, c... aa, ab, ac...
         if total <= len(self.letters):
             return self.letters[index]
         
@@ -24,7 +24,13 @@ class HintManager:
             return self.letters[second]
         return self.letters[first - 1] + self.letters[second]
 
-    def scan_screen(self):
+    def scan_screen(self, screen_rect=None):
+        """Scan for clickable UI elements.
+        
+        Args:
+            screen_rect: Optional tuple (left, top, right, bottom) to filter 
+                         elements to a specific monitor's bounds.
+        """
         self.current_hints.clear()
         
         # Connect to Desktop to see all windows
@@ -38,7 +44,7 @@ class HintManager:
         for win in windows:
             # Skip irrelevant windows
             title = win.window_text()
-            if not title or title in ["OverlayWindow", "Program Manager", "Task Manager"]:
+            if not title or title in ["Mouse Overlay", "OverlayWindow", "Program Manager", "Task Manager"]:
                 continue
                 
             try:
@@ -57,6 +63,13 @@ class HintManager:
                             if rect.width() > 0 and rect.height() > 0:
                                 x = rect.left + rect.width() // 2
                                 y = rect.top + rect.height() // 2
+                                
+                                # Filter to active screen bounds if specified
+                                if screen_rect is not None:
+                                    sl, st, sr, sb = screen_rect
+                                    if x < sl or x > sr or y < st or y > sb:
+                                        continue
+                                
                                 clickable_elements.append((x, y))
                     except:
                         pass
@@ -85,7 +98,7 @@ class HintManager:
         return hints_for_overlay
 
     def get_coordinate(self, label):
-        return self.current_hints.get(label.upper())
+        return self.current_hints.get(label.lower())
 
     def clear(self):
         self.current_hints.clear()
